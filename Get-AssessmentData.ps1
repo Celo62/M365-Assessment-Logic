@@ -1,35 +1,47 @@
 function Get-AssessmentData {
     $results = @{}
-    # Die korrigierte Basis-URL des Publishers
-    $pubBase = "https://raw.githubusercontent.com/ThomasKur/M365Documentation/master/M365Documentation/Functions/Public"
-    
-    # Präzises Mapping der Unterordner
+    # Wir testen beide gängigen Zweige: main und master
+    $branches = @("main", "master")
+    $foundBase = $null
+
+    # Suche nach dem richtigen Pfad beim Publisher
+    foreach ($branch in $branches) {
+        $testUrl = "https://raw.githubusercontent.com/ThomasKur/M365Documentation/$branch/M365Documentation/Functions/Public/Teams/Get-M365RepoTeams.ps1"
+        try {
+            $test = Invoke-WebRequest -Uri $testUrl -Method Head -ErrorAction SilentlyContinue
+            if ($test.StatusCode -eq 200) { 
+                $foundBase = "https://raw.githubusercontent.com/ThomasKur/M365Documentation/$branch/M365Documentation/Functions/Public"
+                break 
+            }
+        } catch {}
+    }
+
+    if (!$foundBase) {
+        Write-Error "Konnte die Basis-URL des Publishers nicht finden (404 auf allen Branches)."
+        return $results
+    }
+
     $mapping = @{
-        "AzureAD"  = "$pubBase/AzureAD/Get-M365RepoAzureAD.ps1"
-        "Intune"   = "$pubBase/Intune/Get-M365RepoIntune.ps1"
-        "Exchange" = "$pubBase/ExchangeOnline/Get-M365RepoExchangeOnline.ps1"
-        "Teams"    = "$pubBase/Teams/Get-M365RepoTeams.ps1"
+        "AzureAD"  = "$foundBase/AzureAD/Get-M365RepoAzureAD.ps1"
+        "Intune"   = "$foundBase/Intune/Get-M365RepoIntune.ps1"
+        "Exchange" = "$foundBase/ExchangeOnline/Get-M365RepoExchangeOnline.ps1"
+        "Teams"    = "$foundBase/Teams/Get-M365RepoTeams.ps1"
     }
 
     foreach ($service in $mapping.Keys) {
         try {
             $url = $mapping[$service]
-            Write-Host "Hole Logik für $service..." -ForegroundColor Gray
+            Write-Host "Lade Logik für $service von: $url" -ForegroundColor Gray
             
-            # Skriptinhalt vom Publisher laden
             $code = Invoke-RestMethod -Uri $url -ErrorAction Stop
-            
-            # In den lokalen Speicher laden (Dot-Sourcing)
             $sb = [scriptblock]::Create($code)
-            . $sb 
+            . $sb # Dot-Sourcing: Lädt die Funktion lokal in den RAM
 
-            # Funktionsname bestimmen
             $funcName = "Get-M365Repo" + ($service -eq "Exchange" ? "ExchangeOnline" : $service)
-            
-            Write-Host "Extrahiere Daten: $service" -ForegroundColor Cyan
+            Write-Host "Extrahiere Daten: $service..." -ForegroundColor Cyan
             $results[$service] = Invoke-Expression $funcName -ErrorAction Stop
         } catch {
-            Write-Warning "Konnte $service nicht laden. Pfad prüfen: $url"
+            Write-Warning "Konnte $service nicht laden. Fehler: $($_.Exception.Message)"
         }
     }
     return $results
