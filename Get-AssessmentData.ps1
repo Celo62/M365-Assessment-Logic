@@ -1,47 +1,54 @@
 function Get-AssessmentData {
     $results = @{}
-    # Wir testen beide gängigen Zweige: main und master
-    $branches = @("main", "master")
-    $foundBase = $null
+    
+    # Wir definieren mögliche Basis-Pfade, falls der Publisher etwas verschoben hat
+    $basePaths = @(
+        "https://raw.githubusercontent.com/ThomasKur/M365Documentation/master/M365Documentation/Functions/Public/Microsoft365",
+        "https://raw.githubusercontent.com/ThomasKur/M365Documentation/main/M365Documentation/Functions/Public/Microsoft365",
+        "https://raw.githubusercontent.com/ThomasKur/M365Documentation/master/M365Documentation/Functions/Public",
+        "https://raw.githubusercontent.com/ThomasKur/M365Documentation/main/M365Documentation/Functions/Public"
+    )
 
-    # Suche nach dem richtigen Pfad beim Publisher
-    foreach ($branch in $branches) {
-        $testUrl = "https://raw.githubusercontent.com/ThomasKur/M365Documentation/$branch/M365Documentation/Functions/Public/Teams/Get-M365RepoTeams.ps1"
-        try {
-            $test = Invoke-WebRequest -Uri $testUrl -Method Head -ErrorAction SilentlyContinue
-            if ($test.StatusCode -eq 200) { 
-                $foundBase = "https://raw.githubusercontent.com/ThomasKur/M365Documentation/$branch/M365Documentation/Functions/Public"
-                break 
-            }
-        } catch {}
+    $services = @{
+        "AzureAD"  = "Get-M365RepoAzureAD.ps1"
+        "Intune"   = "Get-M365RepoIntune.ps1"
+        "Exchange" = "Get-M365RepoExchangeOnline.ps1"
+        "Teams"    = "Get-M365RepoTeams.ps1"
     }
 
-    if (!$foundBase) {
-        Write-Error "Konnte die Basis-URL des Publishers nicht finden (404 auf allen Branches)."
-        return $results
-    }
-
-    $mapping = @{
-        "AzureAD"  = "$foundBase/AzureAD/Get-M365RepoAzureAD.ps1"
-        "Intune"   = "$foundBase/Intune/Get-M365RepoIntune.ps1"
-        "Exchange" = "$foundBase/ExchangeOnline/Get-M365RepoExchangeOnline.ps1"
-        "Teams"    = "$foundBase/Teams/Get-M365RepoTeams.ps1"
-    }
-
-    foreach ($service in $mapping.Keys) {
-        try {
-            $url = $mapping[$service]
-            Write-Host "Lade Logik für $service von: $url" -ForegroundColor Gray
+    foreach ($service in $services.Keys) {
+        $found = $false
+        Write-Host "`nSuche Logik für $service..." -ForegroundColor Yellow
+        
+        foreach ($base in $basePaths) {
+            # Wir bauen den Pfad dynamisch (manche liegen in Unterordnern, manche nicht)
+            $urlsToTry = @(
+                "$base/$($services[$service])",
+                "$base/$service/$($services[$service])"
+            )
             
-            $code = Invoke-RestMethod -Uri $url -ErrorAction Stop
-            $sb = [scriptblock]::Create($code)
-            . $sb # Dot-Sourcing: Lädt die Funktion lokal in den RAM
-
-            $funcName = "Get-M365Repo" + ($service -eq "Exchange" ? "ExchangeOnline" : $service)
-            Write-Host "Extrahiere Daten: $service..." -ForegroundColor Cyan
-            $results[$service] = Invoke-Expression $funcName -ErrorAction Stop
-        } catch {
-            Write-Warning "Konnte $service nicht laden. Fehler: $($_.Exception.Message)"
+            foreach ($url in $urlsToTry) {
+                try {
+                    $response = Invoke-WebRequest -Uri $url -Method Head -ErrorAction SilentlyContinue
+                    if ($response.StatusCode -eq 200) {
+                        Write-Host "Gefunden! Lade von: $url" -ForegroundColor Gray
+                        $code = Invoke-RestMethod -Uri $url
+                        $sb = [scriptblock]::Create($code)
+                        . $sb # Dot-Sourcing lokal
+                        
+                        $funcName = "Get-M365Repo" + ($service -eq "Exchange" ? "ExchangeOnline" : $service)
+                        Write-Host "Extrahiere Daten für $service..." -ForegroundColor Cyan
+                        $results[$service] = Invoke-Expression $funcName
+                        $found = $true
+                        break
+                    }
+                } catch { }
+            }
+            if ($found) { break }
+        }
+        
+        if (!$found) {
+            Write-Warning "Konnte die Logik für $service unter keinem bekannten Pfad finden."
         }
     }
     return $results
